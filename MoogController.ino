@@ -1,236 +1,279 @@
-/*********************
-
-Example code for the Adafruit RGB Character LCD Shield and Library
-
-This code displays text on the shield, and also reads the buttons on the keypad.
-When a button is pressed, the backlight changes color.
-
-**********************/
-
-// include the library code:
 #include <Wire.h>
 #include <Adafruit_MCP23017.h>
 #include <Adafruit_RGBLCDShield.h>
 #include <MF104.h>
 #include <EEPROM.h>
 
-// These #defines make it easy to set the backlight color
-#define RED 0x1
-#define YELLOW 0x3
-#define GREEN 0x2
-#define TEAL 0x6
-#define BLUE 0x4
-#define VIOLET 0x5
-#define WHITE 0x7
-//decalre MF104 object
-#define totalParameters 19
+const int VIOLET = 0x5;
+const int BUTTON1_PIN = 4;
+const int BUTTON2_PIN = 8;
+const int BUTTON3_PIN = 10;
+const int LED1_PIN = 5;
+const int LED2_PIN = 6;
+const int LED3_PIN = 7;
+const int RED_BUTTON_PIN = 13;
+const int UP_BUTTON_PIN = 12;
+const int DOWN_BUTTON_PIN = 11;
+const int PLAY_MODE = 1;
+const int EDIT_MODE = 2;
+const int PRESET1_ADDRESS = 100;
+const int PRESET2_ADDRESS = 120;
+const int PRESET3_ADDRESS = 140;
+const int TOTAL_PARAMETERS = 19;
 
-MF104 superDelay[3][3];
-int GlobalBank = 1; //start on bank 1
-int GlobalPreset = 1; //start on preset 1
-int GlobalParameter = 1; //start on parameter 1
-int GlobalValue;
-
-
-// The shield uses the I2C SCL and SDA pins. On classic Arduinos
-// this is Analog 4 and 5 so you can't use those for analogRead() anymore
-// However, you can connect other I2C sensors to the I2C bus and share
-// the I2C bus.
 Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
+int BUTTON1_PREVIOUS_VALUE;
+int BUTTON2_PREVIOUS_VALUE;
+int BUTTON3_PREVIOUS_VALUE;
+int CURRENT_PRESET;
+int CURRENT_PARAM_INDEX;
+int CURRENT_PARAM_VALUE;
+int PREVIOUS_PARAM_VALUE;
+int MODE;
 
-
+MF104 mf104[4];
 
 void setup() {
   Serial.begin(31250);
   lcd.begin(16, 2);
   lcd.setBacklight(VIOLET);
-  initializePins(4,10,8);
-  loadPreSets();  
-  GlobalValue = superDelay[GlobalBank][GlobalPreset].getValue(GlobalParameter);
-  updateLCD(GlobalBank, GlobalPreset, GlobalParameter, GlobalValue);
+  
+  pinMode(BUTTON1_PIN, INPUT_PULLUP);
+  pinMode(BUTTON2_PIN, INPUT_PULLUP);
+  pinMode(BUTTON3_PIN, INPUT_PULLUP);
+  pinMode(RED_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(UP_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(DOWN_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED1_PIN, OUTPUT);
+  pinMode(LED2_PIN, OUTPUT);
+  pinMode(LED3_PIN, OUTPUT);
+  digitalWrite(LED1_PIN, LOW);
+  digitalWrite(LED2_PIN, LOW);
+  digitalWrite(LED3_PIN, LOW);
+  BUTTON1_PREVIOUS_VALUE = -1; //Initialize to button1 state
+  BUTTON2_PREVIOUS_VALUE = digitalRead(BUTTON2_PIN);
+  BUTTON3_PREVIOUS_VALUE = digitalRead(BUTTON3_PIN);
+  MODE = PLAY_MODE;
+  CURRENT_PRESET = 1;
+  CURRENT_PARAM_INDEX = 0;
+  mf104[1].loadData(PRESET1_ADDRESS);
+  mf104[2].loadData(PRESET2_ADDRESS);
+  mf104[3].loadData(PRESET3_ADDRESS);
+  printWelcome();
+  delay(3000);
+  printPerformanceLayout();
 }
 
-uint8_t i=0;
-int prevMidiValue;
-int prevBS1;
-int prevBS2;
-int prevBS3;
-
-void loop() {
-  uint8_t buttons = lcd.readButtons();
-  GlobalValue = readPot(A0); 
-  int buttonState1 = digitalRead(4);
-  int buttonState2 = digitalRead(10);
-  int buttonState3 = digitalRead(8);
-  
-  
-  if (GlobalValue != prevMidiValue) //Knob is changed
-    {
-      //lcd.clear();
-      updateLCDvalue(GlobalValue);
-      superDelay[GlobalBank][GlobalPreset].setValue(GlobalParameter,GlobalValue);
-      superDelay[GlobalBank][GlobalPreset].sendSettings();
-      prevMidiValue = GlobalValue;
-      delay(50);
-    }
-
-  if (buttons) //Selection Buttons are Changed
-  {
-    if (buttons == 0x12) //LEFT + RIGHT Pressed
-    {
-      GlobalBank++;
-      if(GlobalBank > 3)
-        GlobalBank = 1;
-      GlobalValue = superDelay[GlobalBank][GlobalPreset].getValue(GlobalParameter);
-      updateLCD(GlobalBank, GlobalPreset, GlobalParameter, GlobalValue);
-      delay(400);
-    }
-    else if (buttons & BUTTON_RIGHT) {
-      GlobalParameter--;
-      if(GlobalParameter < 1) //check for edge
-        GlobalParameter = totalParameters;
-      GlobalValue = superDelay[GlobalBank][GlobalPreset].getValue(GlobalParameter);
-      updateLCD(GlobalBank, GlobalPreset, GlobalParameter, GlobalValue);
-      delay(200);
-    }
-    else if (buttons & BUTTON_LEFT) {
-      GlobalParameter++;
-      if(GlobalParameter > totalParameters) //check for edge
-        GlobalParameter = 1;
-      GlobalValue = superDelay[GlobalBank][GlobalPreset].getValue(GlobalParameter);
-      updateLCD(GlobalBank, GlobalPreset, GlobalParameter, GlobalValue);
-      delay(200);
-    }
-    else if (buttons & BUTTON_SELECT) {
-      storePreset(GlobalBank, GlobalPreset);
-      //superDelay[GlobalBank][GlobalPreset].sendSettings();
-      lcd.clear();
-      lcd.setCursor(4,0); lcd.print("SAVED");
-      lcd.setCursor(3,1); lcd.print("SETTING!!!");
-      delay(1000);
-      updateLCD(GlobalBank, GlobalPreset, GlobalParameter, GlobalValue);
-    }
-    
+void loop() { 
+  if (MODE == PLAY_MODE) {
+    loopPlayMode();
+  } else if (MODE == EDIT_MODE) {
+    loopEditMode();
   }
-
-  //store "previous" states so we can detect changes
-
-  prevBS1 = buttonState1;
-  prevBS2 = buttonState2;
-  prevBS3 = buttonState3;
 }
 
-void storePreset(int bank, int preset)
-{
-  int address = (bank*100) + (preset*20);
-  superDelay[bank][preset].storeData(address);
-}
+void loopPlayMode() {
+  int button1_value = digitalRead(BUTTON1_PIN);
+  int button2_value = digitalRead(BUTTON2_PIN);
+  int button3_value = digitalRead(BUTTON3_PIN);
 
-void loadPreSets() //load all presets from EEPROM
-{
-  superDelay[0][0].loadData(0);
-  superDelay[0][1].loadData(20);
-  superDelay[0][2].loadData(40);
-  superDelay[1][0].loadData(100);
-  superDelay[1][1].loadData(120);
-  superDelay[1][2].loadData(140);
-  superDelay[2][0].loadData(200);
-  superDelay[2][1].loadData(220);
-  superDelay[2][2].loadData(240);
-}
-
-void initializePins(int A, int B, int C)
-{
-     pinMode(A, INPUT);
-     pinMode(B, INPUT);
-     pinMode(C, INPUT);
-}
-
-
-int readPot(int port)
-{
-   int sensorValue = analogRead(port);
-   return sensorValue * (127.0/1023.0);
-}
-
-void updateLCD(int bank, int preset, int parameter, int value)
-{
+  if (button1_value != BUTTON1_PREVIOUS_VALUE) {
+    digitalWrite(LED1_PIN, HIGH);
+    digitalWrite(LED2_PIN, LOW);
+    digitalWrite(LED3_PIN, LOW);
+    CURRENT_PRESET = 1;
+    mf104[CURRENT_PRESET].sendSettings();
+    printPerformanceLayout();
+  } else if (button2_value != BUTTON2_PREVIOUS_VALUE) {
+    digitalWrite(LED1_PIN, LOW);
+    digitalWrite(LED2_PIN, HIGH);
+    digitalWrite(LED3_PIN, LOW);
+    CURRENT_PRESET = 2;
+    mf104[CURRENT_PRESET].sendSettings();
+    printPerformanceLayout();
+  } else if (button3_value != BUTTON3_PREVIOUS_VALUE) {
+    digitalWrite(LED1_PIN, LOW);
+    digitalWrite(LED2_PIN, LOW);
+    digitalWrite(LED3_PIN, HIGH);
+    CURRENT_PRESET = 3;
+    mf104[CURRENT_PRESET].sendSettings();
+    printPerformanceLayout();
+  } else if (digitalRead(RED_BUTTON_PIN) == 0){
+    digitalWrite(LED1_PIN, LOW);
+    digitalWrite(LED2_PIN, LOW);
+    digitalWrite(LED3_PIN, LOW);
     lcd.clear();
     lcd.setCursor(0,0);
-    lcd.print(bank); lcd.print("-");
-    lcd.print(preset); lcd.print(":"); 
-    printParameterName(parameter);
+    lcd.print("Edit mode");
+    delay(1000);
+    lcd.clear();
+    printEditLayout();
+    MODE = EDIT_MODE;
+  } else if (digitalRead(UP_BUTTON_PIN) == 0){
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Press red button");
     lcd.setCursor(0,1);
-    lcd.print("VALUE:"); lcd.print(value);
+    lcd.print("to edit");
+    delay(2000);
+    printPerformanceLayout();
+  } else if (digitalRead(DOWN_BUTTON_PIN) == 0){
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Press red button");
+    lcd.setCursor(0,1);
+    lcd.print("to edit");
+    delay(2000);
+    printPerformanceLayout();
+  }
+
+  BUTTON1_PREVIOUS_VALUE = button1_value;
+  BUTTON2_PREVIOUS_VALUE = button2_value;
+  BUTTON3_PREVIOUS_VALUE = button3_value;
 }
 
-void updateLCDvalue(int value)
+void loopEditMode() { 
+  blink();
+
+  int button1_value = digitalRead(BUTTON1_PIN);
+  int button2_value = digitalRead(BUTTON2_PIN);
+  int button3_value = digitalRead(BUTTON3_PIN);
+
+  if (button1_value != BUTTON1_PREVIOUS_VALUE || 
+    button2_value != BUTTON2_PREVIOUS_VALUE || 
+    button3_value != BUTTON3_PREVIOUS_VALUE ||
+    digitalRead(RED_BUTTON_PIN) == 0) {
+    if (CURRENT_PRESET == 1) {
+      digitalWrite(LED1_PIN, HIGH);
+      BUTTON1_PREVIOUS_VALUE = -1;
+      BUTTON2_PREVIOUS_VALUE = button2_value;
+      BUTTON3_PREVIOUS_VALUE = button3_value;
+      mf104[CURRENT_PRESET].storeData(PRESET1_ADDRESS);
+    } else if (CURRENT_PRESET == 2) {
+      digitalWrite(LED2_PIN, HIGH);
+      BUTTON2_PREVIOUS_VALUE = -1;
+      BUTTON1_PREVIOUS_VALUE = button1_value;
+      BUTTON3_PREVIOUS_VALUE = button3_value;
+      mf104[CURRENT_PRESET].storeData(PRESET2_ADDRESS);
+    } else if (CURRENT_PRESET == 3) {
+      digitalWrite(LED3_PIN, HIGH);
+      BUTTON3_PREVIOUS_VALUE = -1;
+      BUTTON1_PREVIOUS_VALUE = button1_value;
+      BUTTON2_PREVIOUS_VALUE = button2_value;
+      mf104[CURRENT_PRESET].storeData(PRESET3_ADDRESS);
+    }
+    MODE = PLAY_MODE;
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Saving...");
+    delay(3000);
+    lcd.clear();
+    digitalWrite(LED1_PIN, LOW);
+    digitalWrite(LED2_PIN, LOW);
+    digitalWrite(LED3_PIN, LOW);
+  }
+  
+  CURRENT_PARAM_VALUE = getKnobValue(A0);
+  if (CURRENT_PARAM_VALUE != PREVIOUS_PARAM_VALUE) {
+    printValue();
+    mf104[CURRENT_PRESET].setValue(CURRENT_PARAM_INDEX, CURRENT_PARAM_VALUE);
+    mf104[CURRENT_PRESET].sendSettings();
+    PREVIOUS_PARAM_VALUE = CURRENT_PARAM_VALUE;
+    delay(50);
+  }
+
+  if (digitalRead(UP_BUTTON_PIN) == 0){
+    CURRENT_PARAM_INDEX++;
+    if (CURRENT_PARAM_INDEX >= TOTAL_PARAMETERS) {
+      CURRENT_PARAM_INDEX = 0;
+    }
+    CURRENT_PARAM_VALUE = mf104[CURRENT_PRESET].getValue(CURRENT_PARAM_INDEX);
+    printEditLayout();
+    delay(400);
+  } else if (digitalRead(DOWN_BUTTON_PIN) == 0){
+    CURRENT_PARAM_INDEX--;
+    if (CURRENT_PARAM_INDEX < 0) {
+      CURRENT_PARAM_INDEX = TOTAL_PARAMETERS - 1;
+    }
+    CURRENT_PARAM_VALUE = mf104[CURRENT_PRESET].getValue(CURRENT_PARAM_INDEX);
+    printEditLayout();
+    delay(400);
+  }
+
+}
+
+int getKnobValue(int port)
 {
-    lcd.setCursor(6,1);
-    lcd.print(value);
-    lcd.print("  ");
+  // -1: null, don't send midi data
+  // 0-127: send midi data
+   int sensorValue = analogRead(port);
+   return (sensorValue * (128.0/1023.0)) - 1;
 }
 
-void printParameterName(int parameter)
-{ 
-  switch(parameter)
-  {
-    case 1:
-      lcd.print("Output Level");
-      break;
-    case 2:
-      lcd.print("Time");
-      break;
-    case 3:
-      lcd.print("Feedback");
-      break;
-    case 4:
-      lcd.print("Mix");
-      break;
-    case 5:
-      lcd.print("LFO Rate");
-      break;
-    case 6:
-      lcd.print("LFO Amount");
-      break;
-    case 7:
-      lcd.print("LFO Waveform");
-      break;
-    case 8:
-      lcd.print("Range");
-      break;
-    case 9:
-      lcd.print("Time Slew Rate");
-      break;
-    case 10:
-      lcd.print("EQ");
-      break;
-    case 11:
-      lcd.print("Dly Time Mult");
-      break;
-    case 12:
-      lcd.print("LFO Phase Reset");
-      break;
-    case 13:
-      lcd.print("LFO ClkDiv");
-      break;
-    case 14:
-      lcd.print("Time ClkDiv");
-      break;
-    case 15:
-      lcd.print("Spillover");
-      break;
-    case 16:
-      lcd.print("Triplets");
-      break;
-    case 17:
-      lcd.print("Tap Dest");
-      break;
-    case 18:
-      lcd.print("LED Div");
-      break;
-    case 19:
-      lcd.print("Bypass");
-      break;
-  }  
+int PREVIOUS_MILLIS = 0;
+void blink(){
+  int blink_interval = 500;
+  int current_millis = millis();
+  if (CURRENT_PRESET == 1) {
+    if(current_millis - PREVIOUS_MILLIS > blink_interval) {
+      digitalWrite(LED1_PIN, !digitalRead(LED1_PIN));
+      PREVIOUS_MILLIS = current_millis;
+    }
+  } else if (CURRENT_PRESET == 2) {
+    if(current_millis - PREVIOUS_MILLIS > blink_interval) {
+      digitalWrite(LED2_PIN, !digitalRead(LED2_PIN));
+      PREVIOUS_MILLIS = current_millis;
+    }
+  } else if (CURRENT_PRESET == 3) {
+    if(current_millis - PREVIOUS_MILLIS > blink_interval) {
+      digitalWrite(LED3_PIN, !digitalRead(LED3_PIN));
+      PREVIOUS_MILLIS = current_millis;
+    }
+  }
+}
+
+void printPerformanceLayout(){
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Performance Mode");
+  lcd.setCursor(0,1);
+  lcd.print("preset: ");
+  lcd.print(CURRENT_PRESET);
+}
+
+void printEditLayout(){
+  int cc = mf104[CURRENT_PRESET].getCC(CURRENT_PARAM_INDEX);
+  lcd.clear();
+  lcd.setCursor(0,0);
+  String name;
+  mf104[CURRENT_PRESET].getName(name, CURRENT_PARAM_INDEX);
+  lcd.print(name);
+  lcd.setCursor(0,1);
+  lcd.print(cc); 
+  lcd.print(":");
+  printValue();
+}
+
+void printValue(){
+  int cc = mf104[CURRENT_PRESET].getCC(CURRENT_PARAM_INDEX);
+  lcd.setCursor(6,1);
+  if (CURRENT_PARAM_VALUE < 0) {
+    lcd.print("null");
+  } else {
+    String output = "";
+    mf104[CURRENT_PRESET].displayOutput(output, cc, CURRENT_PARAM_VALUE);
+    if (output.length() == 0){
+      lcd.print(CURRENT_PARAM_VALUE);
+    } else {
+      lcd.print(output);
+    }
+  }
+  lcd.print("            ");
+}
+
+void printWelcome(){
+  lcd.setCursor(0,0);
+  lcd.print("   V O N G O N  ");
+  lcd.setCursor(0,1);
+  lcd.print("  V O N G O N   ");
 }

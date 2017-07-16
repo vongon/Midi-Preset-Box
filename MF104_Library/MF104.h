@@ -16,10 +16,12 @@ class MF104
     void sendSettings();
     void setValue(int parameter, uint8_t value);
     uint8_t getValue(int parameter);
+    uint8_t getCC(int parameter);
     void storeData(int address);
     void loadData(int address);
  private:
-    uint8_t attribute[19][2];
+    uint8_t parameters[19][2];
+    const char *parameterNames[19];
 };
 
 #endif
